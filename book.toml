@@ -3,3 +3,8 @@ authors = ["Distributed Lab"]
 language = "en"
 src = "src"
 title = "0-ART Book"
+
+[preprocessor.katex]
+
+[output.html.copy-files]
+"assets/*" = "assets/"

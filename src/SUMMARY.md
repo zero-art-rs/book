@@ -1,7 +1,7 @@
 # Summary
 
 - [Introduction](./intro/0_intro.md)
-- [Service Provider](./sp/0_sp.md)
+- [Infrastructure](./infrastructure/0_infrastructure.md)
 - [Application Layer Protocol](./protocol/0_protocol.md)
   - [Protobuf Definitions](./protocol/1_protocol.md)
   - [Group Operations](./protocol/2_protocol.md)
