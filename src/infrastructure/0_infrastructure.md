@@ -10,7 +10,7 @@ The system comprises two core components:
 
 The high level of the system architecture:
 
-![0_infrastructure_0.png](../assets/0_infrastructure_0.png)
+![High level architecture](../assets/0_infrastructure_0.png)
 
 ## Storage
 MongoDB was chosen for data storage because there is no need for relationships between data and high throughput is required. MongoDB can be replaced with any other KV NoSQL database.

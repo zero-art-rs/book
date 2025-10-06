@@ -52,4 +52,6 @@ listener:
 
 ## Use Case
 
-todo
+In order to share your profile with another user, for example via a QR code or link, not all metadata and SPKs can fit into the QR code, let alone the link. One option for sharing is to add the ID and AES key to the QR code or link, encrypt the data with the specified AES key, and upload it to Transistor with the specified ID.
+
+![Transistor use case](../assets/2_infrastructure_0.png)
