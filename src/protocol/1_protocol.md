@@ -1,0 +1,173 @@
+```protobuf
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+package zero_art_proto;
+
+enum Role {
+  READ = 0; // only read permission
+	WRITE = 1; // only write
+	OWNERSHIP = 2; // owner
+	ADMIN = 3; // administrator
+}
+
+// User definition
+message User {
+  string id = 1; // actor id
+  string name = 2; // user name
+  bytes public_key = 3; // user identity public key
+  bytes picture = 4; // user picture
+  Role role = 5; // user role
+}
+
+enum ContentAttachmentType {
+	IMAGE = 0;
+	BINARY = 1;
+	VIDEO = 2;
+}
+
+message ContentAttachment {
+	string id = 1;
+	ContentAttachmentType type = 2;
+	bytes data = 3;
+}
+
+// CRDT payload: could be either incremental change or full document
+message CRDTPayload {
+	oneof payload {
+		bytes incremental_change = 1;
+		bytes full_document = 2;
+		ContentAttachment media_attachment = 3;
+	}
+}
+
+// Ordinary chat payload: text, image or file
+message ChatPayload {
+	oneof payload {
+		bytes text = 1;
+		bytes img = 2;
+		bytes file = 3;
+	}
+}
+
+message GroupInfo {
+  string id = 1; // document id
+  string name = 2; // document name
+  google.protobuf.Timestamp created = 3; // document creation time
+  bytes picture = 4;
+  repeated User members = 10; // membership list of document
+}
+
+// Protected (could be visible only inside group) group actions
+message GroupActionPayload {
+  oneof action {
+	  GroupInfo init = 1; // group init action
+	  GroupInfo invite_member = 2; // invite member action
+	  User remove_member = 3; // remove member action
+	  User join_group = 4; // join group action
+	  User change_user = 5; // user changes they metadata
+	  GroupInfo change_group = 6; // group metadata change
+	  User leave_group = 7; // member leaves group
+	  User finalize_removal = 8; // finalize removal of a member
+  }
+}
+
+// Payload wrapper
+message Payload {
+  oneof content {
+    CRDTPayload crdt = 1;
+    ChatPayload chat = 2;
+    
+    GroupActionPayload action = 10;
+  }
+}
+
+// High level group operation visible by SP
+message GroupOperation {
+	oneof operation {
+		bytes init = 1; // public art
+		bytes add_member = 2; // branch_changes
+		bytes remove_member = 3; // branch_changes
+		bytes key_update = 4; // branch_changes
+		bytes leave_group = 5; // own_node_index
+		bytes drop_group = 10; // challenge
+	}
+}
+
+message FrameTBS {
+    string group_id = 1; // group identifier
+    uint64 epoch = 2; // epoch number
+    bytes nonce = 3; // random 16b nonce for replay attack protection
+    GroupOperation group_operation = 5; // group operation
+    bytes protected_payload = 6; // encrypted ProtectedPayload message
+}
+
+// main transport layer frame [client] -> [SP]
+message Frame {
+    FrameTBS frame = 1; // frame data included in proof transcript
+    bytes proof = 9; // proof of group_operation with included context of frame
+}
+
+// transport layer frame [SP] -> [client]
+message SPFrame {
+    uint64 seq_num = 1; // sequence number set by SP when Frame received from client
+    google.protobuf.Timestamp created = 4; // time SP received frame
+    Frame frame = 5;
+}
+
+// vector of SPFrames for SP
+message SPFrames {
+    repeated SPFrame sp_frames = 1;
+}
+
+message ProtectedPayloadTBS {
+    uint64 seq_num = 1; // internal sequence number of message (might not be equal to SPFrame.seq_num)
+    oneof sender {
+        string user_id = 2; // user identifier (User.id)
+        string leaf_id = 3; // leaf identifier (masking user real identity)
+        // null if user wants to post in anonymous mode
+    }
+    google.protobuf.Timestamp created = 4;
+    repeated Payload payload = 5;
+}
+
+// protected application layer message(decrypted Frame.protected_payload)
+message ProtectedPayload {
+    ProtectedPayloadTBS payload = 1;
+    bytes signature = 9; // signature of payload using method defined in ProtectedPayloadTBS.sender field
+}
+
+// auxiliary protected invite data
+message ProtectedInviteData {
+    string group_id = 1;
+    uint64 epoch = 2;
+    bytes stage_key = 3;
+}
+
+// Invite for some identified user (Q_id, Q_spk)
+message IdentifiedInvite {
+    bytes identity_public_key = 1; // identity public key of invitee
+    bytes spk_public_key = 2; // spk public key of invitee
+}
+
+// Invite for unidentified user
+message UnidentifiedInvite {
+	bytes private_key = 3; // private key of invitee
+}
+
+message InviteTbs {
+    oneof invite {
+        IdentifiedInvite identified_invite = 1;
+        UnidentifiedInvite unidentified_invite = 2;
+    }
+    bytes protected_invite_data = 9; // encrypted on shared secret ProtectedInviteData
+    bytes identity_public_key = 10; // public key of invitor
+    bytes ephemeral_public_key = 11; // one-time ephemeral public key of invitor
+}
+
+message Invite {
+    InviteTbs invite = 1;
+    bytes signature = 9; // Sign(identity_public_key, invite.serialize())
+}
+```
