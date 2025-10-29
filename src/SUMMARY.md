@@ -9,3 +9,7 @@
   - [Protobuf Definitions](./protocol/1_protocol.md)
   - [Group Operations](./protocol/2_protocol.md)
 - [Client SDK](./sdk/0_sdk.md)
+- [Core](./core/0_core.md)
+  - [ART management](./core/1_core.md)
+  - [Proofs](./core/2_core.md)
+  - [Cortado Curve](./core/3_core.md)
