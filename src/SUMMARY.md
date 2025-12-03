@@ -11,5 +11,7 @@
 - [Client SDK](./sdk/0_sdk.md)
 - [Core](./core/0_core.md)
   - [ART management](./core/1_core.md)
-  - [Proofs](./core/2_core.md)
-  - [Cortado Curve](./core/3_core.md)
+  - [Preview](./core/2_core.md)
+  - [Proofs](./core/3_core.md)
+  - [Cortado Curve](./core/4_core.md)
+

@@ -1,86 +1,196 @@
-# Cortado Curve
+# Art Update Proofs
+Proofs can be managed with `zrt-zk` and `zrt-crypto` crates. There are two engines for proof creation and verification. `ZeroArtProverEngine` and `ZeroArtVerifierEngine`.
+```rust,ignore
+use zrt_zk::engine::{ZeroArtProverEngine, ZeroArtVerifierEngine};
+
+...
+
+let prover_engine = ZeroArtProverEngine::default();
+let verifier_engine = ZeroArtVerifierEngine::default();
+```
+
+Proof of change with `ZeroArtProverEngine` can be done as next:
+```rust,ignore
+let (_, change, prover_branch) = private_art.update_key(new_sk).unwrap();
+	
+let proof = prover_engine
+	.new_context(eligibility_artefact)
+	.for_branch(&prover_branch)
+	.with_associated_data(associated_data)
+	.prove(&mut thread_rng())
+	.unwrap();
+```
+
+Here, `eligibility_artefact` is an artefact, which describes the rights of the user to perform an operation. Prover branch is a collection of public keys and secrets returned by the operation for proof creation. Currently there are two methods: `for_branch(...)` and `for_aggregation(...)`. There are three types of `EligibilityArtefact`:
+```rust,ignore
+use cortado::{CortadoAffine, Fr};
+use zrt_zk::cred::Credential;
+
+...
+
+pub enum EligibilityArtefact {
+    /// Just normal member of the group, needed for UpdateKey & ConfirmRemove ops.
+    Member((Fr, CortadoAffine)),
+
+    /// Owner of the group, could perform AddMember, RemoveMember
+    Owner((Fr, CortadoAffine)),  
+
+    /// Holder of a credential, needed for anonymous AddMember & RemoveMember ops.
+    CredentialHolder((Fr, Credential)), 
+}
+```
+
+Now, proof verification can be done with verifier engine as next:
+```rust,ignore
+let verification_result = verifier_engine
+	.new_context(eligibility_requirement)
+	.with_associated_data(associated_data)
+	.for_branch(&public_art.verification_branch(&change).unwrap())
+	.verify(&proof);
+```
+
+For verification, we pass corresponding `eligibility_requirement`, the same `associated_data`, verification branch or tree and `proof`. `EligibilityRequirement` can be one of the next two types:
+```rust,ignore
+use cortado::CortadoAffine;
+use curve25519_dalek::Scalar;
+
+...
+
+pub enum EligibilityRequirement {
+    /// Requirement for proof of leaf possession or group membership, public key is provided
+    Member(CortadoAffine),
+    
+    /// Requirement for the previleged rights
+    Previleged((CortadoAffine, Vec<Scalar>)),
+}
+```
+
+In this case, `Member` artefact corresponds to `Member` requirement at verification, when `Owner` and `CredentialHolder` artefacts correspond to `Previleged` requirement.
+
 ```admonish note
-Our implementation of argument systems defined in the framework heavily uses our fork of Dalek’s [bulletproofs](https://github.com/zkcrypto/bulletproofs) implementation:
-
-[https://github.com/zk-messenger/bulletproofs](https://github.com/zk-messenger/bulletproofs)
+All the proofs are created specificly for elliptic curve [Cortado](./3_core.md). For that reasons all the proof creation and verification traits are implemented only for this curve.
 ```
 
-Having to prove statements about points over elliptic curves, efficiency is crucial for our applications, so we found elliptic curve **Cortado $E/\mathbb{F}_q:y^2=x^3+ax+b, \#E(\mathbb{F}_q)=r$** that is defined over scalar field $\mathbb{F}_q$ of [Ristretto](https://ristretto.group/) elliptic curve group (built over the same parameters as [curve25519](https://cr.yp.to/ecdh.html)), which is used as a core group for _bulletproofs_ implementation. So **Cortado** forms so-called semi-cycle of elliptic curves with _Ristretto._ We use **Cortado** curve as a main ART group $\mathbb{G}$ in our implementation.
-```admonish note
-[https://github.com/zk-messenger/project-m/blob/feature-creds/crates/zk/src/curve/cortado/cortado.rs](https://github.com/zk-messenger/project-m/blob/feature-creds/crates/zk/src/curve/cortado/cortado.rs)
+## Example
+ART update proof creation and verification can be done with `PrivateArt` structure. As was said before, when the user update `PrivateArt`, he receives `prover_branch` of type `Vec<ProverNodeData<G>>` along with new tree key and `BranchChange`. This proof can be serialized with crate `ark_serialize`. For example:
+
+```rust,ignore
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+
+let prover_engine = ZeroArtProverEngine::default();
+
+...
+
+let sk = Fr::rand(&mut rng);
+let (_, change, prover_branch) = private_art.update_key(sk).unwrap();
+
+let leaf_sk = private_art.secrets().preview().leaf();
+let leaf_pk = CortadoAffine::generator().mul(leaf_sk).into_affine();
+let proof = prover_engine
+    .new_context(EligibilityArtefact::Member((leaf_sk, leaf_pk)))
+    .for_branch(&prover_branch)
+    .with_associated_data(associated_data)
+    .prove(&mut thread_rng())
+    .unwrap();
 ```
 
-## Parameters
+For verification we will use `EligibilityRequirement::Member` as it is the default one in this case (this is specified by the `zero-art` protocol).
+```rust,ignore
+let leaf_pk = private_art
+	.preview()
+	.node(&append_user_changes.node_index)
+	.unwrap()
+	.public_key();
 
-```
-q = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed
-```
+let verification_branch = public_art
+	.preview()
+	.verification_branch(&change)?;
 
-```
-r = 0x100000000000000000000000000000007694c45f377088ccabbd72861f7cba8b
-```
-
-```
-a = 3
-```
-
-```
-b = 0x44046d0b327ef5023f5204c6a00ffd21ef176b641795bb22c68ac9d3bdc9d18
-```
-
-Base points (could be seen as a Pedersen basis):
-
-```
-G = (0xb4e65b863c4d2f65041c91f0eda3147bc7b288c0994c9833eba34f0979cf416, 0xb6ed55f428dcdb8fde1419dc53084b70c10c9da632511b9407c6b5d7defc6e4)
+let verification_result = verifier_engine  
+    .new_context(EligibilityRequirement::Member(leaf_pk))  
+    .with_associated_data(&associated_data)  
+    .for_branch(&verification_branch)  
+    .verify(&proof);
 ```
 
-```
-H = (0x2043492057a5d4ee72a746140818b194949275ce144fc994203703d5c14d1a8, 0x6612dddfb454452dfda7fcc761369d451e3cd045b81b9679be5f745c607d8a6)
-```
+Aggregation proof work similary.
+```rust,ignore
+// Create aggregation.
+let mut agg = ProverChangeAggregation::from(private_art.clone());
+agg.add_member(Fr::rand(&mut rng)).unwrap();
+...
 
-## Security considerations
-Curve is generated randomly by the sage script:
-```python
-# Define field F_p
-p = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed
-Fp = FiniteField(p)
-print("Поле F_p, де p =", p)
+// Create proof.
+let leaf_sk = private_art.secrets().preview().leaf();
+let leaf_pk = CortadoAffine::generator().mul(leaf_sk).into_affine();
+let eligibility_artefact = EligibilityArtefact::Owner((leaf_sk, leaf_pk));
+let proof = prover_engine
+	.new_context(eligibility_artefact)
+	.for_aggregation(&ProverAggregationTree::try_from(&agg).unwrap())
+	.with_associated_data(associated_data)
+	.prove(&mut thread_rng())
+	.unwrap();
 
-# Function to find a curve with a simple order
-def find_prime_order_curve(max_attempts=10000000):
-    b = Fp.random_element()
-    for i in range(max_attempts):
-        # Generate random coefficients a and b in F_p
-        a = 3
-        b += 1
-        # Checking the oddness condition: 4a^3 + 27b^2 ≠ 0
-        if 4*a^3 + 27*b^2 == 0:
-            continue  # The curve is singular, skip
-        # Creating an elliptic curve in Weierstrass-form
-        E = EllipticCurve(Fp, [a, b])
-        # Calculate the order of E(F_p)
-        n = E.cardinality()
-        if i % 1000 == 0:
-            print("Attempt ", i, " b =", b)
-        if E.is_supersingular():
-            print("Supersingular curve")
-            continue
-        # Checking if the order is simple
-        if is_prime(n):
-            print("\\nA curve with a simple order is found after", i+1, "attempts:")
-            print("a =", a)
-            print("b =", b)
-            print("Curve order =", n)
-            return E
-    print("\\nNo curve with prime order found after", max_attempts, "attempts.")
-    return None
-
-# Curve search
-E = find_prime_order_curve()
-
-if E is not None:
-    print("\\nResulting curve:")
-    print(E)
+// Convert aaggregation to send-safe form.
+let change = AggregatedChange::try_from(&agg).unwrap();
 ```
 
-The curve has prime order of length 253bits and MOV attack is not applicable so that the curve gives nearly 126bits of security under _Discrete Logarithm_ assumption.
+Verification can be done for received `aggregation` by similar means.
+```rust,ignore
+let verification_tree = private_art
+	.preview()
+	.verification_tree(&change).unwrap();
+	
+let verification_result = verifier_engine
+	.new_context(EligibilityRequirement::Previleged((leaf_pk, vec![])))
+	.for_aggregation(&verification_tree)
+	.with_associated_data(associated_data)
+	.verify(&proof);
+```
+# Schnorr signature
+Crate `zrt-crypto` has methods `sign(...)` and `verify(...)` for Schnorr signatures. They allow the user to sign some message with several keys. For example, to sign the messages `msg: &[u8]` with some vector of keys keys `sk: Vec<Fr>` and corresponding set of public keys `Q: Vec<CortadoAffine>`, one can do the next:
+```rust,ignore
+use zrt_crypto::schnorr::sign;
+...
+let signature: Vec<u8> = sign(&sk, &Q, msg).unwrap();
+```
+
+Then for verification one can pass the signature, the same set of public keys and the same message:
+```rust,ignore
+use zrt_crypto::schnorr::verify;
+...
+assert!(verify(&signature, &Q, msg).is_ok())
+```
+
+# Credentials
+Credential issuer, which has his `issuer_secret_key: Fr` can issue an new credential for the holder. Assume the next prerequisites:
+```rust,ignore
+let holder_secret_key: Fr;  
+let issuer_secret_key: Fr;  
+let validity_period: u64;
+let holder_public_key: CortadoAffine;  
+let revocation_list: Vec<Scalar>;
+```
+
+the credential issuer can issue a credential as next:
+```rust,ignore
+use zrt_zk::cred::Credential;
+
+// Issue a credential
+let credential =  
+    Credential::issue(issuer_secret_key, validity_period, holder_public_key).unwrap();  
+  
+// Verify the credential  
+assert!(credential.verify().is_ok());
+```
+
+Then the holder can present the credential presentation proof with the next method:
+```rust,ignore
+// Create a credential presentation proof  
+let proof = credential  
+    .present(holder_secret_key, revocation_list.clone())  
+    .unwrap();  
+  
+// Verify the credential presentation proof  
+assert!(Credential::verify_presentation(&proof, revocation_list).is_ok());
+```

@@ -1,148 +1,36 @@
-# Art Update Proofs
-`zrt-art` provides two traits for proof creation and verification: `ProvableChange` and `VerifiableChange`. Their interface make proof creation and verification similar for all the changes.
-
-`ProvableChange` provide change with method `prove`:
+# PublicArt preview
+`PublicART` have a dedicated `merge_tree` struct to handle merges. Merge tree is also a binary tree as `ArtNode`, but it can have single child. Any node in this tree contains `PublicMergeData`. This structure represents change of the corresponding node in PublicArt after applying changes.
 ```rust,ignore
-fn prove<'a, R>(  
-    &self,  
-    art: &mut PrivateZeroArt<'a, R>,  
-    ad: &[u8],  
-    eligibility: Option<EligibilityArtefact>,  
-) -> Result<ArtProof, ArtError>;
-```
-
-Here `art` is an instance of PrivateZeroArt, (the only one used to create proofs), `ad` is an associated data and `eligibility` is an optional artefact, which describes the rights of the user to perform an operation. There are next types of `EligibilityArtefact`:
-```rust,ignore
-pub enum EligibilityArtefact {
-    /// Just normal member of the group, needed for UpdateKey & ConfirmRemove ops.
-    Member((Fr, CortadoAffine)),
-
-    /// Owner of the group, could perform AddMember, RemoveMember
-    Owner((Fr, CortadoAffine)),  
-
-    /// Holder of a credential, needed for anonymous AddMember & RemoveMember ops.
-    CredentialHolder((Fr, Credential)), 
+pub struct PublicMergeData<G: AffineRepr> {
+    pub strong_key: Option<G>,
+    pub weak_key: Option<G>,
+    pub status: Option<LeafStatus>,
+    pub weight_change: i32,
 }
 ```
 
-On the other hand, trait `VerifiableChange` provide the change with method `verify`:
-```rust,ignore
-fn verify(
-        &self,
-        art: &T,
-        ad: &[u8],
-        eligibility_requirement: EligibilityRequirement,
-        proof: &ArtProof,
-    ) -> Result<(), ArtError>;
-```
+Here `status` is a new status of a leaf node and `weight_change` is change of the weight of the corresponding node in a tree. `strong_key` and `weak_key` defines how resulting public key of the node changes. The idea behind this is that there are several types of changes, differed by the way they are applied. We distinguish three categories of updates:
+* Updates that overwrite the current key.
+* Updates that may either overwrite or extend the current key, depending on conditions.
+* Updates that unconditionally extend the current key.
 
-For verification, we pass current state of the `art`, the same associated data `ad`, corresponding `eligibility_requirement` and `proof`. `EligibilityRequirement` can also have different types:
-```rust,ignore
-pub enum EligibilityRequirement {
-    /// Requirement only for proof of leaf possession or group membership, public key is provided
-    Member(CortadoAffine),
-    
-    /// Requirement for the previleged rights
-    Previleged((CortadoAffine, Vec<Scalar>)),
+This. can be generalized to `strong_key` and `weak_key`. When we call `commit()`, `strong_key`, if exists, will replace original one, and then `weak_key`, if exists, will be added to it. With this we can update our `merge_tree` by updating corresponding strong and weak keys.
+
+To update the tree, user must have the latest state of it, but instead of requiring invocation of `commit()`, operations are performed over  `PublicArtPreview`. It is a wrapper over `PublicArt`, which can look in `PublicArt` root and its `merge_tree` at the same time. Internally, it behave like commit, but it doesn't change the tree. This structure has similar set of methods to PublicArt tree but cant be mutated.
+## NodeIndex preview
+NodeIndex can change so it also has its own preview. In our case it is an optional copy of the index. On commit, it will replace original one. `ArtNodeIndex` is a struct which handles this logic.
+
+## ArtSecrets preview
+`ArtSecrets` has more complex changes then `NodeIndex`.
+
+```rust, ignore
+pub struct ArtSecrets<G: AffineRepr> {
+    secrets: Vec<G::ScalarField>,
+    secrets_preview: Vec<ArtSecretPreview<G>>,
+    secrets_preview_excess: Vec<ArtSecretPreviewExcess<G>>,
 }
 ```
 
-In this case, `Member` artefact corresponds to `Member` requirement at verification, when `Owner` and `CredentialHolder` artefacts correspond to `Previleged` requirement.
+This structure contain `secrets`, which are current secrets of branch on path from root to leaf. `secrets_preview` and `secrets_preview_excess` store public keys, which are gathered from applied changes. The difference between them lies in `strong_key`, which can be  `None` for `secrets_preview`. The reason, is that `secrets_preview` have their corresponding original key from secrets to compute preview secret key with original secret key, while `ArtSecretPreviewExcess` is used when secrets are increasing in size. For example, when member addition applied and tree increases in size. 
 
-Implementations of `ProvableChange` and `VerifiableChange` for changes is done with dedicated methods of `zrt-zk` crate.
-
-```admonish note
-All the proofs are created specificly for elliptic curve [Cortado](./3_core.md). For that reasons all the proof creation and verification traits are implemented only for this curve.
-```
-## ART operation proof example
-ART update proof creation and verification can be done with with `PrivateZeroArt` structure. When the user update ART, he receives `ArtOperationOutput` instead of `BranchChange`.
-
-```rust,ignore
-let output: ArtOperationOutput<CortadoAffine> = private_zero_art1
-	.update_key(some_secret_key4)
-	.unwrap();
-```
-
-To create a proof use dedicated prove method. `BranchChange` doesn't implement `ProvableChange`, because it lacks additional data, to create a proof.
-```rust,ignore
-let proof: ArtProof = output.prove(&mut private_zero_art1, ad, None).unwrap();
-let change: BranchChange<CortadoAffine> = BranchChange::from(output);
-```
-
-For verification we will use `EligibilityRequirement::Member` as it is the default one in this case (this is specified by the `zero-art` protocol).
-```rust,ignore
-let eligibility_requirement: EligibilityRequirement = EligibilityRequirement::Member(
-	private_zero_art2
-		.get_node(&change.node_index)
-		.unwrap()
-		.get_public_key(),
-);
-change.verify(&private_zero_art2, associated_data, eligibility_requirement, &proof).unwrap();
-```
-
-Aggregation proof works similary.
-```rust,ignore
-// Create aggregation.
-let mut agg = ProverChangeAggregation::default();
-agg.add_member(Fr::rand(&mut rng), &mut private_zero_art1).unwrap();
-...
-
-// Create proof.
-let proof = agg.prove(&mut private_zero_art1, associated_data, None).unwrap();
-
-// Convert aaggregation to send-safe form.
-let plain_agg = PlainChangeAggregation::try_from(&agg).unwrap();
-```
-
-Verification can be done for received `plain_agg` by similar means.
-```rust,ignore
-plain_agg.verify(&private_zero_art2, associated_data, eligibility_requirement, &proof)
-        .unwrap();
-```
-# Schnorr signature
-Crate `zrt-crypto` has methods `sign` and `verify` for Schnorr signatures. They allow the user to sign some message with several keys. For example, to sign the messages `msg: &[u8]` with some vector of keys keys `sk: Vec<Fr>` and corresponding set of public keys `Q: Vec<CortadoAffine>`, the user do the next:
-```rust,ignore
-use zrt_crypto::schnorr::sign;
-...
-let signature: Vec<u8> = sign(&sk, &Q, msg).unwrap();
-```
-
-Then for verification one can pass the signature, the same set op public keys and the message:
-```rust,ignore
-use zrt_crypto::schnorr::verify;
-...
-assert!(verify(&signature, &Q, msg).is_ok())
-```
-
-# Credentials
-Credential issues, which has his `issuer_secret_key: Fr` can issue an new credential for the holder. Assume the next prerequisites:
-```rust,ignore
-let holder_secret_key: Fr;  
-let issuer_secret_key:Fr;  
-let validity_period: u64;
-let holder_public_key: CortadoAffine;  
-let revocation_list: Vec<Scalar>;
-```
-
-the credential issuer can issue a credential as next:
-```rust,ignore
-use zrt_zk::cred::Credential;
-
-// Issue a credential
-let credential =  
-    Credential::issue(issuer_secret_key, validity_period, holder_public_key).unwrap();  
-  
-// Verify the credential  
-assert!(credential.verify().is_ok());
-```
-
-Then the holder can present the credential presentation proof with the next method:
-```rust,ignore
-// Create a credential presentation proof  
-let proof = credential  
-    .present(holder_secret_key, revocation_list.clone())  
-    .unwrap();  
-  
-// Verify the credential presentation proof  
-assert!(Credential::verify_presentation(&proof, revocation_list).is_ok());
-```
+To get secret root key of a tree, which isn't yet comited, one can all `preview()` method to get `ArtSecretsPreview` struct. This is a struct, which will look not only on `secrets` but also on `secrets_preview` and secrets_preview_excess, to retrieve secret keys. Internally it works similar to `PublicArtPreview`, with strong and weak secret keys.
